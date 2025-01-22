@@ -13,11 +13,13 @@ from torch.optim import Adam
 from torch.autograd import Variable
 import utils
 from net import ResCCNet_atten_fuse
+from net_cbam import ResCCNet_cbam_fuse
 from args_fusion import get_parser
 import pytorch_msssim
 from utils import make_floor
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+
 
 def main():
 	parsers = get_parser()
@@ -35,10 +37,10 @@ def train(i, original_imgs_path, args):
 	batch_size = args.batch_size
 
 	# load network model
-	in_c = 1 # 1 - gray
-	img_model = 'L'
+	in_c = 3 # 1 - gray
+	img_model = 'RGB'
 	output_nc = in_c
-	ResCCNet_atten_model = ResCCNet_atten_fuse(output_nc)
+	ResCCNet_atten_model = ResCCNet_cbam_fuse(in_c, output_nc)
 	# print(ResCCNet_atten_model)
 	if args.resume is not None:
 		print('Resuming, initializing using weight from {}.'.format(args.resume))
@@ -88,7 +90,8 @@ def train(i, original_imgs_path, args):
 
 			# get fusion image
 			en = ResCCNet_atten_model.encoder(img)
-			output = ResCCNet_atten_model.decoder(en)
+			output = ResCCNet_atten_model.cbam(en)
+			output = ResCCNet_atten_model.decoder(output)
 
 			# loss
 			x = Variable(img.data.clone(), requires_grad=False)
@@ -119,28 +122,28 @@ def train(i, original_imgs_path, args):
 				all_pixel_loss = 0
 		ResCCNet_atten_model.eval()
 		ResCCNet_atten_model.cpu()
-		save_model_filename =  "Epoch_" + str(e) + "_iters_" + str(count) + "_" +  args.ssim_path[i] + ".model"
+		save_model_filename =  "Epoch_" + str(e) + "_iters_" + str(count) + "_" +  args.ssim_path[i] + "_cbam_" + img_model + ".model"
 		save_model_path = os.path.join(temp_path_model, save_model_filename)
 		torch.save(ResCCNet_atten_model.state_dict(), save_model_path)
 		# save loss data
 		# pixel loss
 		loss_data_pixel_part = np.array(Loss_pixel)
-		loss_filename_path = "loss_pixel_epoch_" + str(e) + "_iters_" + str(count) + "_" + args.ssim_path[i] + ".mat"
+		loss_filename_path = "loss_pixel_epoch_" + str(e) + "_iters_" + str(count) + "_" + args.ssim_path[i] + "_cbam_" + img_model + ".mat"
 		save_loss_path = os.path.join(temp_path_loss, loss_filename_path)
 		scio.savemat(save_loss_path, {'loss_pixel': loss_data_pixel_part})
 		# SSIM loss
 		loss_data_ssim_part = np.array(Loss_ssim)
-		loss_filename_path =  "loss_ssim_epoch_" + str(e) + "_iters_" + str(count) + "_" + args.ssim_path[i] + ".mat"
+		loss_filename_path =  "loss_ssim_epoch_" + str(e) + "_iters_" + str(count) + "_" + args.ssim_path[i] + "_cbam_" + img_model + ".mat"
 		save_loss_path = os.path.join(temp_path_loss, loss_filename_path)
 		scio.savemat(save_loss_path, {'loss_ssim': loss_data_ssim_part})
 		# Data SSIM
 		Data_SSIM_part = np.array(Data_SSIM)
-		loss_filename_path = "Data_SSIM_epoch_" + str(e) + "_iters_" + str(count) + "_" + args.ssim_path[i] + ".mat"
+		loss_filename_path = "Data_SSIM_epoch_" + str(e) + "_iters_" + str(count) + "_" + args.ssim_path[i] + "_cbam_" + img_model + ".mat"
 		save_loss_path = os.path.join(temp_path_loss, loss_filename_path)
 		scio.savemat(save_loss_path, {'Data_SSIM': Data_SSIM_part})
 		# all loss
 		loss_data_total_part = np.array(Loss_all)
-		loss_filename_path = "loss_total_epoch_" + str(e) + "_iters_" + str(count) + "_" + args.ssim_path[i] + ".mat"
+		loss_filename_path = "loss_total_epoch_" + str(e) + "_iters_" + str(count) + "_" + args.ssim_path[i] + "_cbam_" + img_model + ".mat"
 		save_loss_path = os.path.join(temp_path_loss, loss_filename_path)
 		scio.savemat(save_loss_path, {'loss_total': loss_data_total_part})
 
@@ -150,28 +153,28 @@ def train(i, original_imgs_path, args):
 
 	# pixel loss
 	loss_data_pixel = np.array(Loss_pixel)
-	loss_filename_path =  "Final_loss_pixel_epoch_" + str(args.epochs) + args.ssim_path[i] + ".mat"
+	loss_filename_path =  "Final_loss_pixel_epoch_" + str(args.epochs) + args.ssim_path[i] + "_cbam_" + img_model + ".mat"
 	save_loss_path = os.path.join(temp_path_loss, loss_filename_path)
 	scio.savemat(save_loss_path, {'loss_pixel':loss_data_pixel})
 	# SSIM loss
 	loss_data_ssim = np.array(Loss_ssim)
-	loss_filename_path =  "Final_loss_ssim_epoch_" + str(args.epochs) + args.ssim_path[i] + ".mat"
+	loss_filename_path =  "Final_loss_ssim_epoch_" + str(args.epochs) + args.ssim_path[i] + "_cbam_" + img_model + ".mat"
 	save_loss_path = os.path.join(temp_path_loss, loss_filename_path)
 	scio.savemat(save_loss_path, {'loss_ssim': loss_data_ssim})
 	# Data SSIM
 	Data_SSIM_path = np.array(Data_SSIM)
-	loss_filename_path = "Final_Data_SSIM_epoch_" + str(args.epochs) + args.ssim_path[i] + ".mat"
+	loss_filename_path = "Final_Data_SSIM_epoch_" + str(args.epochs) + args.ssim_path[i] + "_cbam_" + img_model + ".mat"
 	save_loss_path = os.path.join(temp_path_loss, loss_filename_path)
 	scio.savemat(save_loss_path, {'Data_SSIM': Data_SSIM_path})
 	# all loss
 	loss_data_total = np.array(Loss_all)
-	loss_filename_path =  "Final_loss_total_epoch_" + str(args.epochs) + args.ssim_path[i] + ".mat"
+	loss_filename_path =  "Final_loss_total_epoch_" + str(args.epochs) + args.ssim_path[i] + "_cbam_" + img_model + ".mat"
 	save_loss_path = os.path.join(temp_path_loss, loss_filename_path)
 	scio.savemat(save_loss_path, {'loss_total': loss_data_total})
 	# save model
 	ResCCNet_atten_model.eval()
 	ResCCNet_atten_model.cpu()
-	save_model_filename = "Final_epoch_" + str(args.epochs) + "_" + args.ssim_path[i] + ".model"
+	save_model_filename = "Final_epoch_" + str(args.epochs) + "_" + args.ssim_path[i] + "_cbam_" + img_model + ".model"
 	save_model_path = os.path.join(temp_path_model, save_model_filename)
 	torch.save(ResCCNet_atten_model.state_dict(), save_model_path)
 

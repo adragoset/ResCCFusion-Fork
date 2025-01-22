@@ -8,33 +8,80 @@ from args_fusion import get_parser
 import numpy as np
 import os
 import time
+import onnx
+from onnxruntime import InferenceSession
+from onnxconverter_common import float16
+from onnxsim import simplify
+
 
 def load_model(path,  output_nc):
+	model = ResCCNet_atten_fuse(output_nc)
+	model.load_state_dict(torch.load(path))
+	model.eval()
+	dummy_input = torch.randn(1, 1, 576, 720)
+	# model.forward = model.encoder
+	# torch.onnx.export(model,{ "input": encoder_dummy_input } ,"resccfusion_encoder.onnx", input_names=["input"])
+	# simplified_encoder = onnx.load("resccfusion_encoder.onnx")
+	# model_simp, check = simplify(simplified_encoder)
+	# if(check == True):
+	# 	onnx.save(model_simp, "resccfusion_encoder.onnx")
+
+	# fusion_dummy_input = torch.randn(2, 112, 576, 720)
+	# torch.onnx.export(model,{ "x": fusion_dummy_input, "y": fusion_dummy_input } ,"resccfusion.onnx", input_names=["x", "y"])
+	# simplified_fusion = onnx.load("resccfusion_fusion.onnx")
+	# model_simp, check = simplify(simplified_fusion)
+	# if(check == True):
+	# 	onnx.save(model_simp, "resccfusion.onnx")
+
+	# decoder_dummy_input = torch.randn(1, 112, 576, 720)
+	# model.forward = model.decoder
+	# torch.onnx.export(model,{ "x": decoder_dummy_input } ,"resccfusion_decoder.onnx", input_names=["input"])
+	# simplified_decoder = onnx.load("resccfusion_decoder.onnx")
+	# model_simp, check = simplify(simplified_decoder)
+	# if(check == True):
+	# 	onnx.save(model_simp, "resccfusion_decoder.onnx")
+
+	torch.onnx.export(model,{ "x": dummy_input, "y": dummy_input } ,"resccfusion.onnx", input_names=["x", "y"])
+	simplified_encoder = onnx.load("resccfusion.onnx")
+	model_simp, check = simplify(simplified_encoder)
+	if(check == True):
+		onnx.save(model_simp, "resccfusion.onnx")
 
 	model = ResCCNet_atten_fuse(output_nc)
 	model.load_state_dict(torch.load(path))
+	model.eval()
+	model.cuda()
 	para = sum([np.prod(list(p.size())) for p in model.parameters()])
 	type_size = 4
 	print('Model {} : params: {:4f}M'.format(model._get_name(), para * type_size / 1000 / 1000))
 
-	model.eval()
-	model.cuda()
-
 	return model
 
 
+
 def _generate_fusion_image(model,img_ir,img_vis,strategy_type,kernel_size = (8,1)):
-	en_ir = model.encoder(img_ir)
-	en_vis = model.encoder(img_vis)
-	feat = model.fusion(en_ir, en_vis, strategy_type,kernel_size)
-	img_fusion = model.decoder(feat)
-	return img_fusion
+	# encodestart = time.time()
+	# en_ir = model.encoder(img_ir)
+	# en_vis = model.encoder(img_vis)
+	# encodeend = time.time()
+	# print("Encode Time:",(encodeend - encodestart))
+	# fusionstart = time.time()
+	# feat = model.fusion(en_ir, en_vis, strategy_type,kernel_size)
+	# fusionend = time.time()
+	# print("Fusion Time:",(fusionend - fusionstart))
+	# decodestart = time.time()
+	# img_fusion = model.decoder(feat)
+	# decodeend = time.time()
+	# print("Decode Time:",(decodeend - decodestart))
+	return model.forward(img_ir,img_vis)
+	#return torch.from_numpy(model.run(None, {"x": img_ir, "y":img_vis})[0])
 
 
 def run_demo(model, infrared_path, visible_path, output_path_root, index,  network_type, strategy_type, mode, args, kernel_size):
 	# prepare data
-	ir_img = utils.get_test_images(infrared_path, height=None, width=None, mode=mode)
-	vis_img = utils.get_test_images(visible_path, height=None, width=None, mode=mode)
+	
+	ir_img = utils.get_test_images(infrared_path, height=512, width=640, mode=mode)
+	vis_img = utils.get_test_images(visible_path, height=512, width=640, mode=mode)
 	if args.cuda:
 		ir_img = ir_img.cuda()
 		vis_img = vis_img.cuda()
@@ -42,11 +89,15 @@ def run_demo(model, infrared_path, visible_path, output_path_root, index,  netwo
 	vis_img = Variable(vis_img, requires_grad=False)
 
 	# fuse images
+	start = time.time()
 	img_fusion = _generate_fusion_image(model, ir_img, vis_img,strategy_type, kernel_size)
+	end = time.time()
+	print("Total inference:",(end - start))
+
 
 	# save images
 	if args.cuda:
-		img = img_fusion.cpu().clamp(0, 255).data[0].numpy()
+		img = img_fusion.to(torch.float).cpu().clamp(0, 255).data[0].numpy()
 	else:
 		img = img_fusion.clamp(0, 255).data[0].numpy()
 

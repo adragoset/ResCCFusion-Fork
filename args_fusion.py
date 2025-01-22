@@ -4,12 +4,12 @@ def get_parser():
 	parser = argparse.ArgumentParser()
 	parser.add_argument("--epochs", type=int, default=4)
 	parser.add_argument("--batch_size", type=int, default=4)
-	parser.add_argument("--dataset", type=str, default="./mscoco database/train2014")
-	# parser.add_argument("--HEIGHT", type=int, default=256)
-	# parser.add_argument("--WIDTH",type=int, default=256)
+	parser.add_argument("--dataset", type=str, default="E:\\Projects\\THERMAL_MONOCULAR\\test\\train2017")
+	parser.add_argument("--HEIGHT", type=int, default=250)
+	parser.add_argument("--WIDTH",type=int, default=250)
 	parser.add_argument("--save_model_dir", type=str, default="./models")
 	parser.add_argument("--save_loss_dir", type=str, default="./models/loss")
-	parser.add_argument("--image_size", type=int, default=256)
+	parser.add_argument("--image_size", type=int, default=250)
 
 	parser.add_argument("--cuda", type=int, default=1, help="set it to 1 for running on GPU, 0 for CPU")
 	parser.add_argument("--seed", type=float, default=42, help="random seed for training")
@@ -30,9 +30,9 @@ def get_parser():
 	parser.add_argument("--resume_auto_de", default=None)
 	parser.add_argument("--resume_auto_fn", default=None)
 	
-	parser.add_argument("--model_path", type=str, default="./models/1e2/Final_epoch_4_1e2.model")
+	parser.add_argument("--model_path", type=str, default="E:\\Projects\\THERMAL_MONOCULAR\\ResCCFusion-Fork\\models\\1e1\\Final_epoch_4_1e1cbam.model")
 	
-	parser.add_argument("--test_path", type = str, default='./testimages/21pairs/')
+	parser.add_argument("--test_path", type = str, default='E:\\Projects\\THERMAL_MONOCULAR\\ResCCFusion-Fork\\testimages\\21pairs\\')
 	parser.add_argument("--kernel_size", default=[8,1])
 
 	parser.add_argument("--output_path", type = str, default='./results/21pairs/')

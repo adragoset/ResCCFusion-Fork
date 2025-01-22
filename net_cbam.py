@@ -3,8 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import ReLU
-import cc_atten
-import os
+EPSILON = 1e-10
 
 # Convolution operation
 class ConvLayer(torch.nn.Module):
@@ -24,9 +23,6 @@ class ConvLayer(torch.nn.Module):
 
         return out
 
-
-
-# Dense Block unit
 class resdnet_Block(torch.nn.Module):
     def __init__(self, in_channels=1, out_channels=1, kernel_size=1, kernel_size_neck=3, stride=1, width=4):
         super(resdnet_Block, self).__init__()
@@ -62,12 +58,47 @@ class resdnet_Block(torch.nn.Module):
         out2 =  self.conv2(torch.cat([x1, x2, x3, x4],dim=1))
 
         return self.relu(out1+out2) 
+    
+class SAM(nn.Module):
+    def __init__(self, bias=False):
+        super(SAM, self).__init__()
+        self.bias = bias
+        self.conv = nn.Conv2d(in_channels=2, out_channels=1, kernel_size=7, stride=1, padding=3, dilation=1, bias=self.bias)
 
+    def forward(self, x):
+        max = torch.max(x,1)[0].unsqueeze(1)
+        avg = torch.mean(x,1).unsqueeze(1)
+        concat = torch.cat((max,avg), dim=1)
+        gamma = torch.tensor(0.5)
+        output = self.conv(concat)
+        output = F.sigmoid(output) * x
+        return gamma * output 
 
+class CAM(nn.Module):
+    def __init__(self, channels, r):
+        super(CAM, self).__init__()
+        self.channels = channels
+        self.r = r
+        self.linear = nn.Sequential(
+            nn.Linear(in_features=self.channels, out_features=self.channels//self.r, bias=True),
+            nn.ReLU(inplace=True),
+            nn.Linear(in_features=self.channels//self.r, out_features=self.channels, bias=True))
+
+    def forward(self, x):
+        max = torch.max(x.flatten(2), 2)[0].unsqueeze(2).unsqueeze(3)
+        avg = torch.mean(x.flatten(2), 2).unsqueeze(2).unsqueeze(3)
+        b, c, _, _ = x.size()
+        linear_max = self.linear(max.view(b,c)).view(b, c, 1, 1)
+        linear_avg = self.linear(avg.view(b,c)).view(b, c, 1, 1)
+        gamma = torch.tensor(0.5)
+        output = linear_max + linear_avg
+        output = F.sigmoid(output) * x
+        return gamma * output
+    
 # DenseFuse network
-class ResCCNet_atten_fuse(nn.Module):
+class ResCCNet_cbam_fuse(nn.Module):
     def __init__(self,in_channel=1, out_channel=1):
-        super(ResCCNet_atten_fuse, self).__init__()
+        super(ResCCNet_cbam_fuse, self).__init__()
         resblock = resdnet_Block
                
         width = [4, 8, 16]
@@ -85,6 +116,11 @@ class ResCCNet_atten_fuse(nn.Module):
         self.RDB2 = resblock(channels[1], channels[1], kernel_size_1, kernel_size_2, stride, width[1])
         self.RDB3 = resblock(channels[2], channels[2], kernel_size_1, kernel_size_2, stride, width[2])
 
+        #Spatial Attention
+        self.sam = SAM(bias=False)
+
+        #Channel Attention
+        self.cam = CAM(channels=decoder_channel[3], r=decoder_channel[3])
 
         # decoder
         self.conv1 = ConvLayer(decoder_channel[3], decoder_channel[2], kernel_size_2, stride,use_relu=True)
@@ -100,45 +136,54 @@ class ResCCNet_atten_fuse(nn.Module):
         x3 = self.RDB3(torch.cat((x0, x1, x2), dim=1))
 
         return torch.cat([x1, x2, x3], dim=1)
+    
+    def cbam(self, input):
+        output = self.cam(input)
+        output = self.sam(output)
+        return output + input
 
-    def fusion(self, en1, en2 ,strategy_type='cc_atten', kernel_size=[8,1]):
-        if strategy_type == 'cc_atten':
-            # attention weight
-            fusion_function = cc_atten.attention_fusion_weight
-            f_0 = fusion_function(en1, en2,kernel_size)  
-        elif strategy_type == 'channel':
-            # attention weight
-            fusion_function = cc_atten.channel_fusion
-            f_0 = fusion_function(en1, en2)
-        elif strategy_type == 'spatial':
-            # attention weight
-            fusion_function = cc_atten.spatial_fusion
-            f_0 = fusion_function(en1, en2,kernel_size)
-        elif strategy_type =='add':
-            # addition
-            fusion_function = cc_atten.addition_fusion
-            f_0 = fusion_function(en1, en2)
-
-        return f_0
-
-    def decoder(self, x):
-        x = self.conv1(x)
-        x = self.conv2(x)
-        x = self.conv3(x)
-        out = self.conv4(x)
+    
+    def decoder(self, input):
+        input = self.conv1(input)
+        input = self.conv2(input)
+        input = self.conv3(input)
+        out = self.conv4(input)
         return out
     
-    def fusion_batched(self, en):
-        out = torch.split(en, split_size_or_sections=1, dim=0)
-        return self.fusion(out[0], out[1])
+    def channel_fusion(self, tensor1, tensor2):
+        # calculate channel attention
+        attention_map1 = self.cam(tensor1)
+        attention_map2 = self.cam(tensor2)
+        # get weight map
+        attention_p1_w1 = attention_map1 / (attention_map1 + attention_map2 + EPSILON)
+        attention_p2_w2 = attention_map2 / (attention_map1 + attention_map2 + EPSILON)
+
+        tensor_f = attention_p1_w1 * tensor1 + attention_p2_w2 * tensor2
+        return tensor_f
+    
+    def spatial_fusion(self, tensor1, tensor2):
+        # calculate spatial attention
+        spatial1 = self.sam(tensor1)
+        spatial2 = self.sam(tensor2)
+        # get weight map
+        spatial_w1 = spatial1 / (spatial1 + spatial2 + EPSILON)
+        spatial_w2 = spatial2 / (spatial1 + spatial2 + EPSILON)
+
+        tensor_f = spatial_w1 * tensor1 + spatial_w2 * tensor2
+        return tensor_f
+    
+    def fusion(self, tensor1, tensor2 ):
+        f_channel = self.channel_fusion(tensor1, tensor2)
+        f_spatial = self.spatial_fusion(tensor1, tensor2)
+        tensor_f = (f_channel + f_spatial) / 2
+        return tensor_f 
     
     def forward(self, x, y):
-        future_x = torch.jit.fork(self.encoder, x)
-        future_y = torch.jit.fork(self.encoder, y)
-        encoder_x = torch.jit.wait(future_x)
-        encoder_y = torch.jit.wait(future_y)
+            future_x = torch.jit.fork(self.encoder, x)
+            future_y = torch.jit.fork(self.encoder, y)
+            encoder_x = torch.jit.wait(future_x)
+            encoder_y = torch.jit.wait(future_y)
 
-        fusion_x = self.fusion(encoder_x, encoder_y)
-        return self.decoder(fusion_x)
-
+            fusion_x = self.fusion(encoder_x, encoder_y)
+            return self.decoder(fusion_x)
 

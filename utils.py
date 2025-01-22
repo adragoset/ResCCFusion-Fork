@@ -4,8 +4,8 @@ from os.path import join
 import random
 import numpy as np
 import torch
-from PIL import Image
-from scipy.misc import imread, imsave, imresize
+from PIL import Image 
+from PIL import ImageOps
 from torchvision import transforms
 
 def make_floor(path1,path2):
@@ -26,7 +26,8 @@ def save_feat1(index,feat,result_path,feat_name):
         temp = temp.cpu().clamp(0, 255).data.numpy()
         feat_filenames = feat_name + '_C' + str(c) + '.png'
         path = index_feat_path + '/' + feat_filenames
-        imsave(path, temp)
+        pilimage = Image.fromarray(temp)
+        pilimage.save(path)
 
 
 
@@ -66,18 +67,19 @@ def load_dataset(image_path, BATCH_SIZE, num_imgs=None):
     return original_imgs_path, batches
 
 
-def get_image(path, height=256, width=256, mode='L'):
+def get_image(path, height=250, width=250, mode='L'):
     if mode == 'L':
-        image = imread(path, mode=mode)
+        image = Image.open(path).convert("L")
     elif mode == 'RGB':
         image = Image.open(path).convert('RGB')
 
     if height is not None and width is not None:
-        image = imresize(image, [height, width], interp='nearest')
-    return image
+        newsize = (width, height)
+        image = ImageOps.fit(image, newsize)
+    return np.array(image)
 
 
-def get_train_images_auto(paths, height=256, width=256, mode='RGB'):
+def get_train_images_auto(paths, height=250, width=250, mode='RGB'):
     if isinstance(paths, str):
         paths = [paths]
     images = []
@@ -115,6 +117,8 @@ def save_images(path, data):
     if data.shape[0] == 1:
         data = data.reshape([data.shape[1], data.shape[2]])
         # print(data.shape)
-    imsave(path, data)
-
+        
+    image = Image.fromarray(data)
+    image = image.convert('RGB')
+    image.save(path)
 
