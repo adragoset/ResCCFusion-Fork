@@ -3,7 +3,7 @@ import os
 from torch.autograd import Variable
 from net_cbam import ResCCNet_cbam_fuse
 # from utils import list_images,make_floor
-from args_fusion import get_parser
+from args_converter import get_parser
 import onnx
 from onnxsim import simplify
 import argparse
@@ -19,8 +19,6 @@ def main():
     in_c = args.channels
     out_c = in_c
     model_path = args.model_path # ssim weight is 1
-    if os.path.exists(base_onnx_save_dir) is False:
-        assert False
     model, dummy_input = load_model(out_c, in_c, model_path)
     file_name = args.file_name
     base_onnx_save_dir = args.base_onnx_save_dir
@@ -29,14 +27,19 @@ def main():
         os.makedirs(base_onnx_save_dir)
     if os.path.exists(base_trt_save_dir) is False:
         os.makedirs(base_trt_save_dir)
-    build_onx(model, dummy_input, file_name)
+    build_onx(model, dummy_input, base_onnx_save_dir, file_name)
     build_engine_from_onnx(base_trt_save_dir, base_onnx_save_dir, file_name)
 
-def load_model(input_nc, output_nc,  path):
+def init_weights(m):
+    if isinstance(m, torch.nn.Linear):
+        torch.nn.init.xavier_uniform(m.weight)
+        m.bias.data.fill_(0.01)
+
+def load_model(input_nc, output_nc, path):
+    dummy_input = torch.randn(1, input_nc, 1152, 1440)
     model = ResCCNet_cbam_fuse(input_nc, output_nc)
     model.load_state_dict(torch.load(path))
     model.eval()
-    dummy_input = torch.randn(1, 1, 1152, 1440)
     return model,dummy_input
 
 def build_onx(model, dummy_input, save_dir, filename):

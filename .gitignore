@@ -5,3 +5,4 @@ pytorch_msssim/
 __pycache__
 *trt
 *.onnx
+testimages/Flir_ADAS

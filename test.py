@@ -18,38 +18,6 @@ def load_model(path,  output_nc):
 	model = ResCCNet_atten_fuse(output_nc)
 	model.load_state_dict(torch.load(path))
 	model.eval()
-	dummy_input = torch.randn(1, 1, 576, 720)
-	# model.forward = model.encoder
-	# torch.onnx.export(model,{ "input": encoder_dummy_input } ,"resccfusion_encoder.onnx", input_names=["input"])
-	# simplified_encoder = onnx.load("resccfusion_encoder.onnx")
-	# model_simp, check = simplify(simplified_encoder)
-	# if(check == True):
-	# 	onnx.save(model_simp, "resccfusion_encoder.onnx")
-
-	# fusion_dummy_input = torch.randn(2, 112, 576, 720)
-	# torch.onnx.export(model,{ "x": fusion_dummy_input, "y": fusion_dummy_input } ,"resccfusion.onnx", input_names=["x", "y"])
-	# simplified_fusion = onnx.load("resccfusion_fusion.onnx")
-	# model_simp, check = simplify(simplified_fusion)
-	# if(check == True):
-	# 	onnx.save(model_simp, "resccfusion.onnx")
-
-	# decoder_dummy_input = torch.randn(1, 112, 576, 720)
-	# model.forward = model.decoder
-	# torch.onnx.export(model,{ "x": decoder_dummy_input } ,"resccfusion_decoder.onnx", input_names=["input"])
-	# simplified_decoder = onnx.load("resccfusion_decoder.onnx")
-	# model_simp, check = simplify(simplified_decoder)
-	# if(check == True):
-	# 	onnx.save(model_simp, "resccfusion_decoder.onnx")
-
-	torch.onnx.export(model,{ "x": dummy_input, "y": dummy_input } ,"resccfusion.onnx", input_names=["x", "y"])
-	simplified_encoder = onnx.load("resccfusion.onnx")
-	model_simp, check = simplify(simplified_encoder)
-	if(check == True):
-		onnx.save(model_simp, "resccfusion.onnx")
-
-	model = ResCCNet_atten_fuse(output_nc)
-	model.load_state_dict(torch.load(path))
-	model.eval()
 	model.cuda()
 	para = sum([np.prod(list(p.size())) for p in model.parameters()])
 	type_size = 4

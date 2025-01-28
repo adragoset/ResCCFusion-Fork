@@ -9,8 +9,8 @@ import numpy as np
 import os
 import time
 
-def load_model(path,  output_nc):
-    model = ResCCNet_cbam_fuse(output_nc)
+def load_model(path,  input_nc, output_nc):
+    model = ResCCNet_cbam_fuse(input_nc, output_nc)
     model.load_state_dict(torch.load(path))
     model.eval()
     model.cuda()
@@ -66,16 +66,16 @@ def main():
 	if os.path.exists(output_path) is False:
 		os.makedirs(output_path)
 
-	in_c = 1
+	in_c = 3
 	out_c = in_c
-	mode = 'L'
+	mode = 'RGB'
 	model_path = args.model_path # ssim weight is 1
 	ssim_name = model_path[-9:-6]
 	network_type = 'ResDFuse_' + strategy_type + '_' + ssim_name
 
 	with torch.no_grad():
 		# print('SSIM weight ----- ' + args.ssim_path[0])
-		model = load_model(model_path, out_c)
+		model = load_model(model_path, in_c, out_c)
 		totaltime=0
 		for name in file_list:
 			print(name)

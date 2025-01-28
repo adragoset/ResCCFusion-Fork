@@ -116,9 +116,10 @@ def get_test_images(paths, height=None, width=None, mode='RGB'):
 def save_images(path, data):
     if data.shape[0] == 1:
         data = data.reshape([data.shape[1], data.shape[2]])
-        # print(data.shape)
+        image = Image.fromarray(data)
+        image = image.convert('RGB')
+    else:
+        image = Image.fromarray(data.astype(np.uint8).transpose(1,2,0))
         
-    image = Image.fromarray(data)
-    image = image.convert('RGB')
     image.save(path)
 

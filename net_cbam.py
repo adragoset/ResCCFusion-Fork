@@ -3,7 +3,17 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import ReLU
+from torch.nn import Softmax
 EPSILON = 1e-10
+
+def INF(B,H,W):
+     tensor = torch.tensor(float("inf")).repeat(H)
+     return -diag2(tensor).unsqueeze(0).repeat(B*W,1,1)
+
+def diag2(x):
+    diag_matrix = x.unsqueeze(0) * torch.eye(len(x))
+    diag_matrix = torch.nan_to_num(diag_matrix, 0)
+    return diag_matrix
 
 # Convolution operation
 class ConvLayer(torch.nn.Module):
@@ -57,7 +67,69 @@ class resdnet_Block(torch.nn.Module):
         
         out2 =  self.conv2(torch.cat([x1, x2, x3, x4],dim=1))
 
-        return self.relu(out1+out2) 
+        return self.relu(out1+out2)
+    
+class CrissCrossSpatialAttention(nn.Module):
+    """ Criss-Cross Attention Module"""
+    def __init__(self, in_dim):
+        super(CrissCrossSpatialAttention,self).__init__()
+        self.query_conv = nn.Conv2d(in_channels=in_dim, out_channels=in_dim//8, kernel_size=1)
+        self.key_conv = nn.Conv2d(in_channels=in_dim, out_channels=in_dim//8, kernel_size=1)
+        self.value_conv = nn.Conv2d(in_channels=in_dim, out_channels=in_dim, kernel_size=1)
+        self.softmax = Softmax(dim=3)
+        self.inf = INF
+        self.gamma = nn.Parameter(torch.zeros(1))
+
+
+    def forward(self, x):
+        m_batchsize, _, height, width = x.size()
+        proj_query = self.query_conv(x)
+        proj_query_H = proj_query.permute(0,3,1,2).contiguous().view(m_batchsize*width,-1,height).permute(0, 2, 1)
+        proj_query_W = proj_query.permute(0,2,1,3).contiguous().view(m_batchsize*height,-1,width).permute(0, 2, 1)
+        proj_key = self.key_conv(x)
+        proj_key_H = proj_key.permute(0,3,1,2).contiguous().view(m_batchsize*width,-1,height)
+        proj_key_W = proj_key.permute(0,2,1,3).contiguous().view(m_batchsize*height,-1,width)
+        proj_value = self.value_conv(x)
+        proj_value_H = proj_value.permute(0,3,1,2).contiguous().view(m_batchsize*width,-1,height)
+        proj_value_W = proj_value.permute(0,2,1,3).contiguous().view(m_batchsize*height,-1,width)
+        energy_H = (torch.bmm(proj_query_H, proj_key_H)+self.inf(m_batchsize, height, width)).view(m_batchsize,width,height,height).permute(0,2,1,3)
+        energy_W = torch.bmm(proj_query_W, proj_key_W).view(m_batchsize,height,width,width)
+        concate = self.softmax(torch.cat([energy_H, energy_W], 3))
+
+        att_H = concate[:,:,:,0:height].permute(0,2,1,3).contiguous().view(m_batchsize*width,height,height)
+        att_W = concate[:,:,:,height:height+width].contiguous().view(m_batchsize*height,width,width)
+        out_H = torch.bmm(proj_value_H, att_H.permute(0, 2, 1)).view(m_batchsize,width,-1,height).permute(0,2,3,1)
+        out_W = torch.bmm(proj_value_W, att_W.permute(0, 2, 1)).view(m_batchsize,height,-1,width).permute(0,2,1,3)
+
+        return self.gamma*(out_H + out_W) + x
+    
+    
+class RCCASpatialModule(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(RCCASpatialModule, self).__init__()
+        inter_channels = in_channels // 4
+        self.downsample1 = nn.Conv2d(in_channels=in_channels, out_channels=in_channels, kernel_size=5, stride=4)
+        self.upsample1 = nn.ConvTranspose2d(in_channels=inter_channels, out_channels=inter_channels, kernel_size=5, stride=4)
+        self.conva = nn.Sequential(nn.Conv2d(in_channels, inter_channels, 3, padding=1, bias=False),
+                                   nn.BatchNorm2d(inter_channels))
+        self.cca = CrissCrossSpatialAttention(inter_channels)
+        self.convb = nn.Sequential(nn.Conv2d(inter_channels, inter_channels, 3, padding=1, bias=False),
+                                   nn.BatchNorm2d(inter_channels))
+
+        self.bottleneck = nn.Sequential(
+            nn.Conv2d(in_channels+inter_channels, out_channels, kernel_size=3, padding=1, dilation=1, bias=False),
+            nn.BatchNorm2d(out_channels)
+            )
+
+    def forward(self, x, recurrence=1):
+        downsampled = self.downsample1(x)
+        output = self.conva(downsampled)
+        for i in range(recurrence):
+            output = self.cca(output)
+        output = self.convb(output)
+        output = self.upsample1(output, output_size=x.size())
+        output = self.bottleneck(torch.cat([x, output], 1))
+        return output
     
 class SAM(nn.Module):
     def __init__(self, bias=False):
@@ -75,29 +147,45 @@ class SAM(nn.Module):
         return gamma * output 
 
 class CAM(nn.Module):
-    def __init__(self, channels, r):
+    def __init__(self, n_channels_in, reduction_ratio):
         super(CAM, self).__init__()
-        self.channels = channels
-        self.r = r
-        self.linear = nn.Sequential(
-            nn.Linear(in_features=self.channels, out_features=self.channels//self.r, bias=True),
-            nn.ReLU(inplace=True),
-            nn.Linear(in_features=self.channels//self.r, out_features=self.channels, bias=True))
+        self.n_channels_in = n_channels_in
+        self.reduction_ratio = reduction_ratio
+        self.middle_layer_size = int(self.n_channels_in/ float(self.reduction_ratio))
+
+        self.bottleneck = nn.Sequential(
+            nn.Linear(self.n_channels_in, self.middle_layer_size),
+            nn.ReLU(),
+            nn.Linear(self.middle_layer_size, self.n_channels_in)
+        )
+
+        self.gamma = nn.Parameter(torch.zeros(1))
+
 
     def forward(self, x):
-        max = torch.max(x.flatten(2), 2)[0].unsqueeze(2).unsqueeze(3)
-        avg = torch.mean(x.flatten(2), 2).unsqueeze(2).unsqueeze(3)
-        b, c, _, _ = x.size()
-        linear_max = self.linear(max.view(b,c)).view(b, c, 1, 1)
-        linear_avg = self.linear(avg.view(b,c)).view(b, c, 1, 1)
-        gamma = torch.tensor(0.5)
-        output = linear_max + linear_avg
-        output = F.sigmoid(output) * x
-        return gamma * output
+        kernel = (x.size()[2], x.size()[3])
+        max_pool = torch.max(x.flatten(2), 2)[0].unsqueeze(2).unsqueeze(3)
+        avg_pool = torch.mean(x.flatten(2), 2).unsqueeze(2).unsqueeze(3)
+
+        
+        avg_pool = avg_pool.view(avg_pool.size()[0], -1)
+        max_pool = max_pool.view(max_pool.size()[0], -1)
+        
+
+        avg_pool_bck = self.bottleneck(avg_pool)
+        max_pool_bck = self.bottleneck(max_pool)
+
+        pool_sum = avg_pool_bck + max_pool_bck
+
+        sig_pool = torch.sigmoid(pool_sum)
+        sig_pool = sig_pool.unsqueeze(2).unsqueeze(3)
+
+        out = sig_pool.repeat(1,1,kernel[0], kernel[1])
+        return  out * x
     
 # DenseFuse network
 class ResCCNet_cbam_fuse(nn.Module):
-    def __init__(self,in_channel=1, out_channel=1):
+    def __init__(self, in_channel=1, out_channel=1):
         super(ResCCNet_cbam_fuse, self).__init__()
         resblock = resdnet_Block
                
@@ -118,9 +206,10 @@ class ResCCNet_cbam_fuse(nn.Module):
 
         #Spatial Attention
         self.sam = SAM(bias=False)
+        #self.sam = RCCASpatialModule(decoder_channel[3], decoder_channel[3])
 
         #Channel Attention
-        self.cam = CAM(channels=decoder_channel[3], r=decoder_channel[3])
+        self.cam = CAM(decoder_channel[3], 2)
 
         # decoder
         self.conv1 = ConvLayer(decoder_channel[3], decoder_channel[2], kernel_size_2, stride,use_relu=True)
